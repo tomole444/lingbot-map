@@ -36,24 +36,71 @@ from PIL import Image
 from tqdm.auto import tqdm
 import open3d as o3d
 
-
 from lingbot_map.utils.pose_enc import pose_encoding_to_extri_intri
 from lingbot_map.utils.geometry import closed_form_inverse_se3_general
 from lingbot_map.utils.load_fn import load_and_preprocess_images
 
-def export_to_ply(predictions, output_name="reconstruction.ply"):
-    # Extrahiere Punkte und Farben
-    pts = predictions["world_points"].reshape(-1, 3)
-    # Falls Farben vorhanden sind (oft in 'images' oder 'colors')
-    # Hier ein Beispiel-Mapping für die Farben:
-    colors = predictions["images"].reshape(-1, 3) 
 
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(pts)
-    pcd.colors = o3d.utility.Vector3dVector(colors.astype(np.float64) / 255.0)
+def export_to_ply(predictions, output_name="reconstruction.ply"):
+    print("Starte 3D-Rekonstruktion aus Tiefenkarten...")
     
-    o3d.io.write_point_cloud(output_name, pcd)
-    print(f"--- Datei erfolgreich gespeichert: {output_name} ---")
+    # 1. Daten aus dem Dictionary holen
+    # Da sie gerade auf CPU geschoben wurden, können wir .numpy() nutzen
+    depths = predictions["depth"].numpy()      # [Frames, H, W]
+    extrinsics = predictions["extrinsic"].numpy()  # [Frames, 3, 4]
+    intrinsics = predictions["intrinsic"].numpy()  # [Frames, 3, 3]
+    
+    # WICHTIG: Prüfen ob Bilder für Farben da sind
+    # Falls du .pop("images") weiter oben gelöscht hast, nutzen wir sie:
+    has_colors = "images" in predictions
+    if has_colors:
+        # Falls images noch ein Tensor ist, zu numpy konvertieren
+        color_imgs = predictions["images"]
+        if torch.is_tensor(color_imgs):
+            color_imgs = color_imgs.permute(0, 2, 3, 1).numpy() # [F, H, W, 3]
+        if color_imgs.max() > 1.0:
+            color_imgs = color_imgs / 255.0
+
+    combined_pcd = o3d.geometry.PointCloud()
+
+    for i in range(len(depths)):
+        # Tiefenbild für Open3D vorbereiten
+        d_img = o3d.geometry.Image(depths[i].astype(np.float32))
+        
+        # Kamera-Parameter (Intrinsic) setzen
+        intrinsic_matrix = intrinsics[i]
+        cam = o3d.camera.PinholeCameraIntrinsic()
+        cam.set_intrinsic(
+            width=depths.shape[2], 
+            height=depths.shape[1],
+            fx=intrinsic_matrix[0, 0], 
+            fy=intrinsic_matrix[1, 1],
+            cx=intrinsic_matrix[0, 2], 
+            cy=intrinsic_matrix[1, 2]
+        )
+        
+        # Kamera-Pose (Extrinsic) vorbereiten (3x4 -> 4x4)
+        ext_4x4 = np.eye(4)
+        ext_4x4[:3, :4] = extrinsics[i]
+        
+        # Punktewolke für diesen Frame erzeugen
+        # Wir nutzen die Inverse der Extrinsics, um von Kamera- in Weltkoordinaten zu kommen
+        if has_colors:
+            c_img = o3d.geometry.Image((color_imgs[i] * 255).astype(np.uint8))
+            rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
+                c_img, d_img, depth_scale=1.0, depth_trunc=100.0, convert_rgb_to_intensity=False
+            )
+            pcd = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd, cam, extrinsic=np.linalg.inv(ext_4x4))
+        else:
+            pcd = o3d.geometry.PointCloud.create_from_depth_image(d_img, cam, extrinsic=np.linalg.inv(ext_4x4))
+        
+        combined_pcd += pcd
+
+    # 4. Speichern der Datei
+    output_file = "lingbot_reconstruction.ply"
+    o3d.io.write_point_cloud(output_file, combined_pcd)
+    print(f"ERFOLG: Punktewolke mit {len(combined_pcd.points)} Punkten gespeichert als {output_file}")
+    # --- ENDE EXTRAKTION ---
 
 # =============================================================================
 # Image loading
@@ -271,7 +318,7 @@ def postprocess(predictions, images):
     predictions["extrinsic"] = extrinsic
     predictions["intrinsic"] = intrinsic
     predictions.pop("pose_enc_list", None)
-    predictions.pop("images", None)
+    #predictions.pop("images", None)
 
     print("Moving results to CPU...")
     for k in list(predictions.keys()):
@@ -549,6 +596,8 @@ def main():
         images_for_post = images
 
     predictions, images_cpu = postprocess(predictions, images_for_post)
+    print("Verfügbare Keys in predictions:", predictions.keys())
+    export_to_ply(predictions)
 
     # ── Visualize ────────────────────────────────────────────────────────────
     try:
