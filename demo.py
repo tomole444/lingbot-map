@@ -34,11 +34,26 @@ import numpy as np
 import torch
 from PIL import Image
 from tqdm.auto import tqdm
+import open3d as o3d
+
 
 from lingbot_map.utils.pose_enc import pose_encoding_to_extri_intri
 from lingbot_map.utils.geometry import closed_form_inverse_se3_general
 from lingbot_map.utils.load_fn import load_and_preprocess_images
 
+def export_to_ply(predictions, output_name="reconstruction.ply"):
+    # Extrahiere Punkte und Farben
+    pts = predictions["world_points"].reshape(-1, 3)
+    # Falls Farben vorhanden sind (oft in 'images' oder 'colors')
+    # Hier ein Beispiel-Mapping für die Farben:
+    colors = predictions["images"].reshape(-1, 3) 
+
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(pts)
+    pcd.colors = o3d.utility.Vector3dVector(colors.astype(np.float64) / 255.0)
+    
+    o3d.io.write_point_cloud(output_name, pcd)
+    print(f"--- Datei erfolgreich gespeichert: {output_name} ---")
 
 # =============================================================================
 # Image loading
