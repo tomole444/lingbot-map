@@ -70,7 +70,7 @@ def export_to_ply(predictions, output_name="reconstruction.ply"):
         # Kamera-Parameter (Intrinsic) setzen
         intrinsic_matrix = intrinsics[i]
         cam = o3d.camera.PinholeCameraIntrinsic()
-        cam.set_intrinsic(
+        cam.set_intrinsics(
             width=depths.shape[2], 
             height=depths.shape[1],
             fx=intrinsic_matrix[0, 0], 
@@ -86,7 +86,11 @@ def export_to_ply(predictions, output_name="reconstruction.ply"):
         # Punktewolke für diesen Frame erzeugen
         # Wir nutzen die Inverse der Extrinsics, um von Kamera- in Weltkoordinaten zu kommen
         if has_colors:
-            c_img = o3d.geometry.Image((color_imgs[i] * 255).astype(np.uint8))
+            # c_img = o3d.geometry.Image((color_imgs[i] * 255).astype(np.uint8))
+            img_data = np.ascontiguousarray((color_imgs[i] * 255).astype(np.uint8))
+            c_img = o3d.geometry.Image(img_data)
+            # depth_data = np.ascontiguousarray(depths[i].astype(np.float32))
+            # d_img = o3d.geometry.Image(depth_data)
             rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
                 c_img, d_img, depth_scale=1.0, depth_trunc=100.0, convert_rgb_to_intensity=False
             )
